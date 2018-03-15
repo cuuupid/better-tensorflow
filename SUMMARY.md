@@ -1,0 +1,37 @@
+# Better TensorFlow (Summary)
+
+# The Graph
+
+Before starting, we had to preprocess the MNIST pickle data. This was completed by standard pixel-based normalization; we flattened the image and divided each pixel grayscale (0-255) value by 255 to scale down between 0 and 1, which is within the limits of our activation function (sigmoid). Sigmoid was chosen for its strengths in classification problems. The output was one-hot encoded, with an array of 10 elements in which each index corresponded to the resultant digit (i.e. '5' is represented as [0,0,0,0,0,1,0,0,0,0]).
+
+Rather than arbitrarily choose a structure, we researched existing frameworks and common guidelines for defining ML frameworks. 
+
+We took inspiration from the Session-Graph model that TensorFlow uses, as well as the Model system in Keras. We combined these into a Graph model, which borrows what we believe are the most convenient features from Keras and Tensorflow, and then implemented each method in Numpy using Gradient Descent. 
+
+We also noted that for saving and loading models, HD5 and Protobuf were very powerful and popular. However, putting this into production with an API, we discovered these libraries, although efficient, used up too many resources. We instead opted for NPZ (compressed numpy archives), which is convenient as the model is written in pure numpy, and is also popular in implementations. For the architecture, we tried many different hyperparameters, and were able to get steady results with hidden units of 42 and 16 respectively without the use of convolutional, batch normalization, or pooling layers, and a batch size of 64. With further research, we discovered another numpy implementation by Michael Nielsen in his book "Neural Networks and Deep Learning." This implementation used a 30-10 network with a batch size of 32; as this proved to be more accurate, we chose this in training. In production, as we recognize the tradeoff between speed and accuracy, we compromised at a batch size of 128, which proved to be the point of diminishing returns in terms of speed gained from increasing batch size. This has worked steadily and we can easily reach accuracies of over 92% using this model with 20 epochs.
+
+The activation function (sigmoid) and its derivative were both turned into methods following the function-based model in TensorFlow. We project it would be possible to also mimic TF Eager and use a functional interface in the future.
+
+For feeding data, we took inspiration from Tensorflow's `feed dict`, which can be provided to a session in a dictionary. However, we found that a more convenient approach is to just zip (X, y) for each training point. Thus, we defined the `feed` method and `batchify` (to get batches) methods with this approach (consider Batch function B which shuffles and chunks input of X elements into Y batches of size n).
+
+Forward and backward propagation are fairly straightforward. For forward, we simply take the dot product of the previous layer and the weight matrix for that layer. The output is the final activation layer.
+
+We then translated the mathematical approach discussed earlier into code, using the helper functions alongside numpy's excellent mathematical library to perform the necessary calculations. We can store the delta of the bias and weight sets for each point in the batch, then adjust the bias and weight set. It is important to do this after each X, y (feature, label) point as doing this post-batch would result in overtraining on the final point in the batch.
+
+Finally, these pieces are combined into one `run` method (nmed for Tensorflow's `session.sun`), which creates the batches and performs gradient descent by simply calling these earlier methods in sequence.
+
+We can decorate this method to be more resourceful in several ways. Using TQDM, we provide a progress bar for the batches similar to how Keras has it implemented in `model.fit`, and we can also log the current epoch (further using `self.epochs` to keep count of how many epochs the model has been trained for). We also keep track of time, and cross-validate if validation data is present (this is again similar to Keras's `model.fit`, which uses the `cross_validate` parameter to validate each epoch).
+
+For cross validation, we had originally planned manual checking using `np.all()`, but took inspiration from other classification approaches that simply create a value of truths (i.e. [yhat==y for y in predictions]) to simplify this process. Since we need to know the label with highest confidence, we can apply numpy's `argmax` function to find the index (which is also the label since our labels are 0-9 and indices are 0-9 --> our labels are our indices) of the highest value.
+
+Another improvement is to initialize random weights instead of zero-ed weights. This should bring us closer to the minima. To achieve this, we can use numpy's `randn` function with the shape of the weights (each node in the next layer must have a weight set, and there must be a weight in the weight set for each node in the previous layer).
+
+# The API
+
+The API still requires the `data` folder with the MNIST pickle file, which you can find under [Releases](https://github.com/pshah123/better-tensorflow/releases).
+
+To build the API server, we needed to make sure I/O and other operations were non-blocking so that the training portion (which is an enormous synchronous call) is the only synchronous portion. To this end, Sanic was used. Sanic is an asyncio implementation of a web server in Python 3, and is extremely similar (if not identical) to Flask. It is regardedly much more stable than Flask, although Flask has more features. While deploying a Flask app requires infrastructure to support uptime such as a Node-based task queue and gunicorn, Sanic's use of async means it maintains uptime regardless of failure (it handles failure with a 500), and cutoff threads/timeouts are killed separately to the main process. Core metrics in the past have shown Sanic remains reliable for weeks under heavy load, even when used with AI models running on GPU threads. Taking all these benefits into account, we implemented a basic API using Sanic.
+
+For predictions, we read the data as base64, as this is a convenient and efficient format for moving images without storing them. Using the Python OpenCV2 module which is standard for image pipelines, we then decode the base64 string and read it as grayscale (the `0` in `imdecode` is the flag for grayscale). The image is then normalized before being passed through the network.
+
+We provide 5 pretrained models (trained between 50% and 90% increasing in accuracy) to avoid training for prolonged periods in the initial phase.
