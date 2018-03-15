@@ -6,7 +6,7 @@
 
 ## Preprocessing
 
-To preprocess, we got the MNIST pickle data (gzipped) from online and then preprocessed it using the following methods:
+To preprocess, we downloaded the MNIST pickle data (gzipped) and preprocessed the images with the following methods:
 
 1. Reshape and standardize the image (`np.reshape(image / 255, (29 * 29, 1))`)
     - dividing by 255 standardizes as pixel values are grayscale 0-255
