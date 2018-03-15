@@ -257,4 +257,4 @@ For the API, we pretrained models from less than 50% to more than 90% accuracy.
 
 # The API
 
-The API still requires the `data` folder with the MNIST pickle file, which you can find under Releases.
+The API still requires the `data` folder with the MNIST pickle file, which you can find under [Releases](./releases).
