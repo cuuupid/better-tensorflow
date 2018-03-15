@@ -1,0 +1,297 @@
+<h1 id="the-graph">The Graph</h1>
+<h2 id="preprocessing">Preprocessing</h2>
+<p>To preprocess, we downloaded the MNIST pickle data (gzipped) and preprocessed the images with the following methods:</p>
+<ol>
+<li><p>Reshape and standardize the image (<code>np.reshape(image / 255, (29 * 29, 1))</code>)</p>
+<ul>
+<li>dividing by 255 standardizes as pixel values are grayscale 0-255</li>
+<li>mnist pictures are supposed to be 29 <em> 29, so instead of using -1 here which would flatten, we use 29 </em> 29 to also assert that the image is a valid MNIST image</li>
+</ul>
+</li>
+<li><p>One-hot encode results (make the vector using <code>np.zeros(10)</code> and then encode using <code>vector[label_index] = 1</code>)</p>
+<ul>
+<li>making an array of zeroes creates a vector that we can one-hot encode (i.e. every index except the label&#39;s index is 0)</li>
+<li>next we can get the label index as the label int, as labels are 0-9, so <code>int(label)</code> works out the index</li>
+<li>one-hot encoding is important since this is a classification problem, so by one-hot encoding instead of using a rounding method, we can access the raw value assigned/activated for each class, which we can then consider the &quot;confidence&quot;</li>
+</ul>
+</li>
+<li><p>Combine features and labels (<code>np.array(list(zip(X, y))))</code>)</p>
+</li>
+<li><p>Split into train, val, test (70%, 20%, and 10% is what we chose in the end for ratios)</p>
+</li>
+<li><p>Save as pickle (<code>pickle.dump((train, val, test), open(&#39;./data/mnist_preprocessed.pkl&#39;, &#39;wb&#39;))</code>)</p>
+<ul>
+<li>we create a tuple (train, test, val) to save everything all at once but also split into ratios</li>
+<li>we use the Python pickle interface to pickle objects together and write them to a file</li>
+<li>this is more memory efficient that preprocessing each time</li>
+</ul>
+</li>
+</ol>
+<p>Data can then be loaded using:</p>
+<pre><code class="lang-python">train, val, test = pickle.<span class="hljs-keyword">load</span>(
+    <span class="hljs-keyword">open</span>(<span class="hljs-string">'./data/mnist_preprocessed.pkl'</span>, <span class="hljs-string">'rb'</span>), <span class="hljs-keyword">encoding</span>=<span class="hljs-string">'latin1'</span>
+)
+</code></pre>
+<h2 id="inspirations">Inspirations</h2>
+<p>Rather than arbitrarily choose a structure, we researched existing frameworks and common guidelines for defining ML frameworks. We took inspiration from the Session-Graph model that TensorFlow uses, as well as the Model system in Keras. We combined these into a Graph model, which borrows what we believe are the most convenient features from Keras and Tensorflow, and then implemented each method in Numpy using Gradient Descent. We also noted that for saving and loading models, HD5 and Protobuf were very powerful and popular. However, putting this into prod with an API, we discovered these libraries, although efficient, used up too many resources. We instead opted for NPZ (compressed numpy archives), which is convenient as the model is written in pure numpy, and is also popular in implementations. For the architecture, we tried many different hyperparameters, and were able to get steady results on with hidden units of 42 and 16 respectively without the use of convolutional, batch normalization, or pooling layers, and a batch size of 64. With further research, we discovered another numpy implementation by Michael Nielsen in his book &quot;Neural Networks and Deep Learning.&quot; This implementation used a 30-10 network with a batch size of 32; as this proved to be more accurate, we chose this in training. In production, as we recognize the tradeoff between speed and accuracy, we compromised at a batch size of 128, which proved to be the point of diminishing returns in terms of speed gained from increasing batch size. This has worked steadily and we can easily reach accuracies of over 92% using this model with 20 epochs.</p>
+<h2 id="activation-functions">Activation Functions</h2>
+<p>We chose to use sigmoid as this is a classification problem and sigmoid is standard/excels at these discrete, class-based approaches. Sigmoid also scales between 0 and 1, so we can consider the output the confidence.</p>
+<p>We defined the Sigmoid function, which is 1/(1 + e ^ (-x)), using the Python math library to calculate <em>e</em> as such:</p>
+<pre><code class="lang-python"><span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">sigmoid</span><span class="hljs-params">(x)</span></span>: <span class="hljs-keyword">return</span> <span class="hljs-number">1.0</span> / (<span class="hljs-number">1.0</span> + math.exp(-x))
+</code></pre>
+<p>For speed, we switched to Numpy&#39;s <code>exp</code> function instead:</p>
+<pre><code class="lang-python"><span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">sigmoid</span><span class="hljs-params">(x)</span></span>: <span class="hljs-keyword">return</span> <span class="hljs-number">1.0</span> / (<span class="hljs-number">1.0</span> + np.exp(-x))
+</code></pre>
+<p>The derivative of sigmoid is simply itself multiplied by the complement to 1, e.g. f * (1 - f), and can be represented as such:</p>
+<pre><code class="lang-python"><span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">dsigmoid</span><span class="hljs-params">(x)</span></span>: <span class="hljs-keyword">return</span> sigmoid(x) * (<span class="hljs-number">1</span> - sigmoid(x))
+</code></pre>
+<h2 id="feeding-data">Feeding data</h2>
+<p>For feeding data, we took inspiration from Tensorflow&#39;s <code>feed dict</code>, which can be provided to a session in the format:</p>
+<pre><code class="lang-python">{<span class="hljs-string">'X'</span>: x, <span class="hljs-string">'y'</span>: y}
+</code></pre>
+<p>However, a more convenient approach is to just zip (X, y) for each training point. Thus, we defined the <code>feed</code> method and <code>batchify</code> (to get batches) methods as follows:</p>
+<pre><code class="lang-python"><span class="hljs-comment"># feed just stores the training and validation data</span>
+<span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">feed</span><span class="hljs-params">(<span class="hljs-keyword">self</span>, train_data, val_data)</span></span>:
+    <span class="hljs-keyword">self</span>.train_data = train_data
+    <span class="hljs-keyword">self</span>.val_data = val_data
+
+<span class="hljs-comment"># Helper method to get batches</span>
+<span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">batchify</span><span class="hljs-params">(<span class="hljs-keyword">self</span>)</span></span>:
+    random.shuffle(<span class="hljs-keyword">self</span>.train_data) <span class="hljs-comment"># shuffle the data around</span>
+    batches = []
+    <span class="hljs-comment"># we use the third parameter of range to chunk batch starting positions</span>
+    <span class="hljs-keyword">for</span> start <span class="hljs-keyword">in</span> range(<span class="hljs-number">0</span>, len(<span class="hljs-keyword">self</span>.train_data), <span class="hljs-keyword">self</span>.batch_size):
+        <span class="hljs-comment"># append the data from start pos of length batch size</span>
+        batches.append(<span class="hljs-keyword">self</span>.train_data[<span class="hljs-symbol">start:</span>start + <span class="hljs-keyword">self</span>.batch_size])
+    console.info(<span class="hljs-string">"Created %d batches."</span> % len(batches))
+    <span class="hljs-keyword">return</span> batches
+</code></pre>
+<h2 id="moving-forward">Moving forward</h2>
+<p>To handle moving forward through the network, we first set the first layer to the input. Next, for each succeeding layer, we calculate the raw output as the dot product of the weights between the previous and current layer and the value of the previous layer, summed with the bias values for the current layer. We then activate this raw output to get the layer&#39;s final value by applying sigmoid.</p>
+<pre><code class="lang-python"><span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">forward</span><span class="hljs-params">(<span class="hljs-keyword">self</span>, X)</span></span>:
+    <span class="hljs-keyword">self</span>.activations[<span class="hljs-number">0</span>] = X
+    <span class="hljs-keyword">for</span> layer <span class="hljs-keyword">in</span> range(<span class="hljs-number">1</span>, len(<span class="hljs-keyword">self</span>.sizes)):
+        <span class="hljs-keyword">self</span>.bias_values[layer] = (
+            <span class="hljs-keyword">self</span>.weights[layer].dot(
+                <span class="hljs-keyword">self</span>.activations[layer - <span class="hljs-number">1</span>]) + <span class="hljs-keyword">self</span>.biases[layer]
+        )
+        <span class="hljs-keyword">self</span>.activations[layer] = sigmoid(<span class="hljs-keyword">self</span>.bias_values[layer])
+</code></pre>
+<h2 id="taking-a-step-back">Taking a step back</h2>
+<p>We then translated the mathematical approach discussed earlier into code, using the helper functions alongside numpy&#39;s excellent mathematical library to perform the necessary calculations.</p>
+<pre><code class="lang-python">def back(self, X, y, <span class="hljs-keyword">dB</span>, dW):
+    ndB = np.array([np.zeros(bias.shape) <span class="hljs-keyword">for</span> bias <span class="hljs-keyword">in</span> self.biases])
+    ndW = np.array([np.zeros(weight.shape) <span class="hljs-keyword">for</span> weight <span class="hljs-keyword">in</span> self.weights])
+
+    <span class="hljs-keyword">err</span> = (self.activations[-1] - y) * dsigmoid(self.bias_values[-1])
+    ndB[-1] = <span class="hljs-keyword">err</span>
+    ndW[-1] = <span class="hljs-keyword">err</span>.dot(self.activations[-2].T)
+
+    <span class="hljs-keyword">for</span> <span class="hljs-keyword">l</span> <span class="hljs-keyword">in</span> <span class="hljs-keyword">list</span>(<span class="hljs-keyword">range</span>(len(self.sizes) - 1))[::-1]:
+        <span class="hljs-keyword">err</span> = np.multiply(
+            self.weights[<span class="hljs-keyword">l</span> + 1].T.dot(<span class="hljs-keyword">err</span>),
+            dsigmoid(self.bias_values[<span class="hljs-keyword">l</span>])
+        )
+        ndB[<span class="hljs-keyword">l</span>] = <span class="hljs-keyword">err</span>
+        ndW[<span class="hljs-keyword">l</span>] = <span class="hljs-keyword">err</span>.dot(self.activations[<span class="hljs-keyword">l</span> - 1].transpose())
+    <span class="hljs-keyword">dB</span> = <span class="hljs-keyword">dB</span> + ndB  # <span class="hljs-keyword">dB</span> = [nb + dnb <span class="hljs-keyword">for</span> nb, dnb <span class="hljs-keyword">in</span> <span class="hljs-keyword">zip</span>(<span class="hljs-keyword">dB</span>, ndB)]
+    dW = dW + ndW  # dW = [nw + dnw <span class="hljs-keyword">for</span> nw, dnw <span class="hljs-keyword">in</span> <span class="hljs-keyword">zip</span>(dW, ndW)]
+    <span class="hljs-keyword">return</span> <span class="hljs-keyword">dB</span>, dW
+</code></pre>
+<h2 id="put-it-all-together">Put it all together</h2>
+<p>Finally, we can combine these pieces into one <code>run</code> method (named after Tensorflow&#39;s <code>session.run</code>) like so:</p>
+<pre><code class="lang-python"><span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">run</span><span class="hljs-params">(<span class="hljs-keyword">self</span>, epochs=<span class="hljs-number">10</span>)</span></span>:
+    batches = <span class="hljs-keyword">self</span>.batchify()
+    <span class="hljs-keyword">for</span> epoch <span class="hljs-keyword">in</span> range(epochs):
+        <span class="hljs-keyword">for</span> batch <span class="hljs-keyword">in</span> <span class="hljs-symbol">batches:</span>
+            <span class="hljs-comment">#####</span>
+            <span class="hljs-comment"># We now perform gradient descent</span>
+            dB = np.array([np.zeros(bias.shape) <span class="hljs-keyword">for</span> bias <span class="hljs-keyword">in</span> <span class="hljs-keyword">self</span>.biases])
+            dW = np.array([np.zeros(weight.shape)
+                            <span class="hljs-keyword">for</span> weight <span class="hljs-keyword">in</span> <span class="hljs-keyword">self</span>.weights])
+            <span class="hljs-keyword">for</span> X, y <span class="hljs-keyword">in</span> <span class="hljs-symbol">batch:</span>
+                <span class="hljs-keyword">self</span>.forward(X)
+                dB, dW = <span class="hljs-keyword">self</span>.back(X, y, dB, dW)
+            <span class="hljs-comment"># Adjust the weights</span>
+            <span class="hljs-keyword">self</span>.weights = np.array([
+                w - (<span class="hljs-keyword">self</span>.learning_rate / <span class="hljs-keyword">self</span>.batch_size) * dw
+                <span class="hljs-keyword">for</span> w, dw <span class="hljs-keyword">in</span> zip(<span class="hljs-keyword">self</span>.weights, dW)
+            ])
+            <span class="hljs-comment"># Adjust the biases</span>
+            <span class="hljs-keyword">self</span>.biases = np.array([
+                b - (<span class="hljs-keyword">self</span>.learning_rate / <span class="hljs-keyword">self</span>.batch_size) * db
+                <span class="hljs-keyword">for</span> b, db <span class="hljs-keyword">in</span> zip(<span class="hljs-keyword">self</span>.biases, dB)
+            ])
+            <span class="hljs-comment">#####</span>
+</code></pre>
+<p>We can decorate this method to be more resourceful in several ways. Using TQDM, we can provide a progress bar for the batches similar to how Keras has it implemented in <code>model.fit</code>, and we can also log the current epoch (further using <code>self.epochs</code> to keep count of how many epochs the model has been trained for). We also keep track of time, and cross-validate if validation data is present (this is again similar to Keras&#39;s <code>model.fit</code>, which uses the <code>cross_validate</code> parameter to validate each epoch).</p>
+<p>This brings us to the decorated <code>run</code> method:</p>
+<pre><code class="lang-python">def run(<span class="hljs-keyword">self</span>, epochs=<span class="hljs-number">10</span>):
+    batches = <span class="hljs-keyword">self</span>.batchify()
+    <span class="hljs-keyword">for</span> epoch <span class="hljs-keyword">in</span> range(epochs):
+        t0 = t()
+        <span class="hljs-keyword">for</span> batch <span class="hljs-keyword">in</span> tqdm(batches):
+            dB = np.array([np.zeros(bias.shape) <span class="hljs-keyword">for</span> bias <span class="hljs-keyword">in</span> <span class="hljs-keyword">self</span>.biases])
+            dW = np.array([np.zeros(weight.shape)
+                            <span class="hljs-keyword">for</span> weight <span class="hljs-keyword">in</span> <span class="hljs-keyword">self</span>.weights])
+            <span class="hljs-keyword">for</span> <span class="hljs-type">X</span>, y <span class="hljs-keyword">in</span> batch:
+                <span class="hljs-keyword">self</span>.forward(<span class="hljs-type">X</span>)
+                dB, dW = <span class="hljs-keyword">self</span>.back(<span class="hljs-type">X</span>, y, dB, dW)
+            <span class="hljs-keyword">self</span>.weights = np.array([
+                w - (<span class="hljs-keyword">self</span>.learning_rate / <span class="hljs-keyword">self</span>.batch_size) * dw
+                <span class="hljs-keyword">for</span> w, dw <span class="hljs-keyword">in</span> <span class="hljs-built_in">zip</span>(<span class="hljs-keyword">self</span>.weights, dW)
+            ])
+            <span class="hljs-keyword">self</span>.biases = np.array([
+                b - (<span class="hljs-keyword">self</span>.learning_rate / <span class="hljs-keyword">self</span>.batch_size) * db
+                <span class="hljs-keyword">for</span> b, db <span class="hljs-keyword">in</span> <span class="hljs-built_in">zip</span>(<span class="hljs-keyword">self</span>.biases, dB)
+            ])
+        console.log(<span class="hljs-string">"Processed %d batches in %.02f seconds."</span> %
+                    (len(batches), t() - t0))
+        <span class="hljs-keyword">if</span> <span class="hljs-keyword">self</span>.val_data <span class="hljs-keyword">is</span> not <span class="hljs-type">None</span>:  # cannot use <span class="hljs-keyword">if</span> <span class="hljs-keyword">self</span>.val_data bc numpy
+            console.info(
+                <span class="hljs-string">"Accuracy: %02f"</span> %
+                (<span class="hljs-keyword">self</span>.validate(<span class="hljs-keyword">self</span>.val_data) / <span class="hljs-number">100.0</span>)
+            )
+        console.success(<span class="hljs-string">"Processed epoch %d"</span> % epoch)
+        <span class="hljs-built_in">print</span>(<span class="hljs-string">"Processed epoch {0}."</span>.format(epoch))
+        <span class="hljs-keyword">self</span>.epochs += <span class="hljs-number">1</span>
+</code></pre>
+<p>Note the use of <code>self.validate</code>, which is a simple method inspired by Michael Nielsen&#39;s take on classification problems; it uses Python truthiness alongside list comprehension to simply count the number of correct predictions. </p>
+<pre><code><span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">validate</span><span class="hljs-params">(<span class="hljs-keyword">self</span>, val_data)</span></span>:
+    <span class="hljs-keyword">return</span> sum(
+        [(<span class="hljs-keyword">self</span>.predict(X)[<span class="hljs-number">0</span>] == y) <span class="hljs-keyword">for</span> X, y <span class="hljs-keyword">in</span> val_data])
+</code></pre><p>Note here the use of <code>self.predict</code>, which is inspired by Keras&#39;s <code>predict</code> function. We simply move forward with an input, and then return the final activation layer.</p>
+<pre><code class="lang-python"><span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">predict</span><span class="hljs-params">(<span class="hljs-keyword">self</span>, X)</span></span>:
+    <span class="hljs-keyword">self</span>.forward(X)
+    <span class="hljs-keyword">return</span> <span class="hljs-keyword">self</span>.activations[-<span class="hljs-number">1</span>]
+</code></pre>
+<p>Since we need to know the label with highest confidence, we can apply numpy&#39;s <code>argmax</code> function to find the index (which is also the label since our labels are 0-9 and indices are 0-9 --&gt; our labels are our indices) of the highest value.</p>
+<pre><code class="lang-python"><span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">predict</span><span class="hljs-params">(<span class="hljs-keyword">self</span>, X)</span></span>:
+    <span class="hljs-keyword">self</span>.forward(X)
+    yhat = <span class="hljs-keyword">self</span>.activations[-<span class="hljs-number">1</span>]
+    <span class="hljs-keyword">return</span> np.argmax(yhat), yhat
+</code></pre>
+<p>Another improvement is to initialize random weights instead of zero-ed weights. This should bring us closer to the minima. To achieve this, we can use numpy&#39;s <code>randn</code> function with the shape of the weights (each node in the next layer must have a weight set, and there must be a weight in the weight set for each node in the previous layer).</p>
+<pre><code class="lang-python">self.weights = <span class="hljs-built_in">np</span>.<span class="hljs-built_in">array</span>([<span class="hljs-built_in">np</span>.zeros(<span class="hljs-number">1</span>)] + [
+            <span class="hljs-built_in">np</span>.<span class="hljs-built_in">random</span>.randn(next_layer_size, previous_layer_size)
+            <span class="hljs-keyword">for</span> next_layer_size, previous_layer_size
+            <span class="hljs-keyword">in</span> zip(sizes[<span class="hljs-number">1</span>:], sizes[:-<span class="hljs-number">1</span>])
+        ])
+</code></pre>
+<h2 id="checkpoints">Checkpoints</h2>
+<p>Instead of implementing Tensorflow&#39;s <em>very</em> bulky checkpointer, we opted for Keras&#39;s very lightweight <code>save</code> and <code>load</code> methods. As discussed in the Inspirations section, we use NPZ archives with inspiration from Michael Nielsen.</p>
+<pre><code class="lang-python">def <span class="hljs-keyword">load</span>(<span class="hljs-keyword">self</span>, <span class="hljs-keyword">file</span>=<span class="hljs-string">'model.npz'</span>):
+    <span class="hljs-keyword">model</span> = np.load(<span class="hljs-string">'./models/%s'</span> % <span class="hljs-keyword">file</span>)
+    self.epochs = <span class="hljs-built_in">int</span>(<span class="hljs-keyword">model</span>[<span class="hljs-string">'epochs'</span>])
+    self.learning_rate = <span class="hljs-built_in">float</span>(<span class="hljs-keyword">model</span>[<span class="hljs-string">'learning_rate'</span>])
+    self.weights = np.array(<span class="hljs-keyword">model</span>[<span class="hljs-string">'weights'</span>])
+    self.biases = np.array(<span class="hljs-keyword">model</span>[<span class="hljs-string">'biases'</span>])
+    self.batch_size = <span class="hljs-built_in">int</span>(<span class="hljs-keyword">model</span>[<span class="hljs-string">'batch_size'</span>])
+
+<span class="hljs-keyword">def</span> <span class="hljs-keyword">save</span>(<span class="hljs-keyword">self</span>, <span class="hljs-keyword">file</span>=<span class="hljs-string">'model.npz'</span>):
+    np.savez_compressed(
+        <span class="hljs-keyword">file</span>=<span class="hljs-string">'./models/%s'</span> % <span class="hljs-keyword">file</span>,
+        epochs=self.epochs,
+        learning_rate=self.learning_rate,
+        weights=self.weights,
+        biases=self.biases,
+        batch_size=self.batch_size
+    )
+</code></pre>
+<p>For the API, we pretrained models from less than 50% to more than 90% accuracy.</p>
+<p>The entire module is put under the &quot;Graph&quot; class in <code>better_tensorflow.py</code>. An example would be as follows:</p>
+<pre><code class="lang-python">import better_tensorflow as btf
+net = btf.Graph((<span class="hljs-number">784</span>, <span class="hljs-number">30</span>, <span class="hljs-number">10</span>), <span class="hljs-number">0.004</span>, <span class="hljs-number">128</span>)
+</code></pre>
+<h1 id="the-api">The API</h1>
+<p>The API still requires the <code>data</code> folder with the MNIST pickle file, which you can find under <a href="https://github.com/pshah123/better-tensorflow/releases">Releases on GitHub</a>.</p>
+<p>To build the API server, we needed to make sure I/O and other operations were non-blocking so that the training portion (which is an enormous synchronous call) is the only synchronous portion. To this end, Sanic was used. Sanic is an asyncio implementation of a web server in Python 3, and is extremely similar (if not identical) to Flask. It is regardedly much more stable than Flask, although Flask has more features. While deploying a Flask app requires infrastructure to support uptime such as a Node-based task queue and gunicorn, Sanic&#39;s use of async means it maintains uptime regardless of failure (it handles failure with a 500), and cutoff threads/timeouts are killed separately to the main process. Core metrics in the past have shown Sanic remains reliable for weeks under heavy load, even when used with AI models running on GPU threads. To this end, we believe Sanic is the perfect choice to deploy an API.</p>
+<p>The basic Sanic setup requires route decorators. To avoid reiterating a basic tutorial of Sanic, we will not go into the specifics of setup, and instead discuss higher-level implementations. We use a CORS handler from the <code>sanic_cors</code> package to setup cross origin headers, which sits as a middleware. Extra methods are used to handle preflight requests so as not to clutter the main endpoints.</p>
+<p>Furthermore, Sanic has special streaming responses that must be implemented; in this scenario, sanic_json and text are used as the main responses, and the <code>json</code> module is independently used so as to properly hash the NumPy floats (which are float32 or float64, not Python floats).</p>
+<p>Logistically, the system-wide representation of the current file/module is referred to as <code>_this</code> (<code>_this = sys.modules[__name__]</code>); this is used due to the async nature of Sanic. To provide all threads with the same variables, we store variables in the module under <code>_this</code> (ie. <code>_this.net = btf.Graph(...)</code>), we do not implement locking, <code>multiprocessing.Variable</code>s, or data stores due to the simple fact that the only modifying operation is synchronous and thread-locking. As the API is being hosted on a DoC server, we also contacted CSG to open up an obfuscated port which is stored in an environmental variable (and not shown here).</p>
+<p>The Sanic app layout is as follows:</p>
+<pre><code>import os
+from sanic import Sanic
+from sanic.response import text, json as sanic_json
+import json
+from sanic_cors import CORS, cross_origin
+app = Sanic()
+CORS(app)
+
+import random
+
+
+@app.route(<span class="hljs-string">'/predict'</span>, methods=[<span class="hljs-string">'OPTIONS'</span>])
+async <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">preflight</span><span class="hljs-params">(q)</span></span>:
+    <span class="hljs-keyword">return</span> text(<span class="hljs-string">'OK'</span>, status=<span class="hljs-number">200</span>)
+
+
+@app.route(<span class="hljs-string">'/reset'</span>, methods=[<span class="hljs-string">'GET'</span>, <span class="hljs-string">'POST'</span>, <span class="hljs-string">'OPTIONS'</span>])
+async <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">reset</span><span class="hljs-params">(q)</span></span>:
+    _this.net = btf.Graph([<span class="hljs-number">784</span>, <span class="hljs-number">30</span>, <span class="hljs-number">10</span>], <span class="hljs-number">0</span>.<span class="hljs-number">5</span>)
+    <span class="hljs-keyword">return</span> text(<span class="hljs-string">'OK'</span>, status=<span class="hljs-number">200</span>)
+
+
+@app.route(<span class="hljs-string">'/pretrain'</span>, methods=[<span class="hljs-string">'GET'</span>, <span class="hljs-string">'POST'</span>, <span class="hljs-string">'OPTIONS'</span>])
+async <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">pretrain</span><span class="hljs-params">(q)</span></span>:
+    _this.net = _this.pretrained
+    <span class="hljs-keyword">return</span> text(<span class="hljs-string">'OK'</span>, status=<span class="hljs-number">200</span>)
+
+
+@app.route(<span class="hljs-string">'/train'</span>, methods=[<span class="hljs-string">'OPTIONS'</span>])
+async <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">preflight2</span><span class="hljs-params">(q)</span></span>:
+    <span class="hljs-keyword">return</span> text(<span class="hljs-string">'OK'</span>, status=<span class="hljs-number">200</span>)
+
+
+@app.route(<span class="hljs-string">'/train'</span>, methods=[<span class="hljs-string">'POST'</span>, <span class="hljs-string">'GET'</span>])
+async <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">train</span><span class="hljs-params">(q)</span></span>:
+    epochs = q.json.get(<span class="hljs-string">'epochs'</span>) <span class="hljs-keyword">if</span> q.json <span class="hljs-keyword">else</span> <span class="hljs-number">1</span>
+    random.shuffle(_this.data)
+    _this.net.feed(_this.data, None)
+    _this.net.run(epochs)
+    random.shuffle(_this.val_data)
+    acc = _this.net.validate(_this.val_data[<span class="hljs-symbol">:</span><span class="hljs-number">100</span>])
+    d = {
+        <span class="hljs-string">'accuracy'</span>: int(acc)
+    }
+    <span class="hljs-keyword">return</span> sanic_json(d, dumps=json.dumps)
+
+
+@app.route(<span class="hljs-string">'/predict'</span>, methods=[<span class="hljs-string">'POST'</span>])
+async <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">predict</span><span class="hljs-params">(q)</span></span>:
+    ...
+
+<span class="hljs-keyword">if</span> __name_<span class="hljs-number">_</span> == <span class="hljs-string">'__main__'</span>:
+    app.run(host=<span class="hljs-string">'0.0.0.0'</span>, port=os.getenv(<span class="hljs-string">'DOC_PORT'</span>))
+</code></pre><p>Note that the <code>train</code> endpoint supports GET, and simply trains, validates, and returns accuracy, so it can be called from a browser as well.</p>
+<p>The data loading is not shown as it was discussed earlier in the Preprocessing section. The predict method is omitted and is instead shown below:</p>
+<pre><code>@app.route(<span class="hljs-string">'/predict'</span>, methods=[<span class="hljs-string">'POST'</span>])
+async def predict(q):
+    imageURI = base64.urlsafe_b64decode(
+        re.sub(<span class="hljs-string">'^data:image/.+;base64,'</span>, <span class="hljs-string">''</span>, q.json.<span class="hljs-built_in">get</span>(<span class="hljs-string">'image'</span>)))
+    <span class="hljs-built_in">image</span> = cv2.imdecode(np.fromstring(imageURI, dtype=np.uint8), <span class="hljs-number">0</span>)
+    <span class="hljs-built_in">image</span> = <span class="hljs-built_in">image</span> / <span class="hljs-number">255</span>
+    <span class="hljs-built_in">print</span>(<span class="hljs-built_in">image</span>.<span class="hljs-built_in">shape</span>)
+    _in = np.reshape(<span class="hljs-built_in">image</span>, (<span class="hljs-number">784</span>, <span class="hljs-number">1</span>))
+    <span class="hljs-keyword">try</span>:
+        <span class="hljs-keyword">if</span> q.json.<span class="hljs-built_in">get</span>(<span class="hljs-string">'pretrained'</span>) &gt; <span class="hljs-number">0</span>:
+            console.<span class="hljs-built_in">log</span>(<span class="hljs-string">"Using model-v%d.npz"</span> % q.json.<span class="hljs-built_in">get</span>(<span class="hljs-string">'pretrained'</span>))
+            _this.pretrained.load(file=<span class="hljs-string">'model-v%d.npz'</span> %
+                                  q.json.<span class="hljs-built_in">get</span>(<span class="hljs-string">'pretrained'</span>))
+            prediction, predictions = _this.pretrained.predict(_in)
+    except Exception as e:
+        prediction, predictions = _this.net.predict(_in)
+    d = {
+        <span class="hljs-string">'label'</span>: <span class="hljs-built_in">int</span>(prediction),
+        <span class="hljs-string">'predictions'</span>: [
+            {<span class="hljs-string">'label'</span>: <span class="hljs-built_in">int</span>(i), <span class="hljs-string">'confidence'</span>: <span class="hljs-built_in">float</span>(<span class="hljs-string">'%02f'</span> % c[<span class="hljs-number">0</span>])}
+            <span class="hljs-keyword">for</span> i, c in enumerate(predictions)
+        ]
+    }
+    j = json.dumps(d)
+    <span class="hljs-built_in">print</span>(prediction)
+    <span class="hljs-built_in">print</span>(j)
+    <span class="hljs-built_in">print</span>(d)
+    <span class="hljs-keyword">return</span> sanic_json(d, dumps=json.dumps)
+</code></pre><p>We read the data as base64, as this is a convenient and efficient format for moving images without storing them. Using the Python OpenCV2 module which is standard for image pipelines, we then decode the base64 string and read it as grayscale (the <code>0</code> in <code>imdecode</code> is the flag for grayscale). Normalization and reshaping as discussed in preprocessing is performed, and if the <code>pretrained</code> key is present then a pretrained model is selected according to specification. Then, a prediction is performed. We round the floats using string templating and then pass the result through a float constructor; although this seems &quot;hacky&quot;, the float constructor is necessary so that Sanic can respond, as <code>float32</code> and <code>float64</code> (NumPy&#39;s defaults) are not hashable in JSON. We also use the int constructor as NumPy likely used uint8 to store the label.</p>
+<p>As such, the endpoints are then available to be referenced by a web application.</p>
